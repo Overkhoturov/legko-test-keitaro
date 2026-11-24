@@ -32,7 +32,7 @@ export default function OfferPicker({
     <div className="relative">
       <input
         className="w-full rounded border border-slate-300 bg-white px-2 py-1.5"
-        placeholder="Поиск оффера по названию или ID"
+        placeholder="Search offer by name or ID"
         value={value ? `[${value.id}] ${value.name}` : text}
         onFocus={() => setOpen(true)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
@@ -44,9 +44,9 @@ export default function OfferPicker({
       />
       {open && !value && (
         <ul className="absolute z-10 mt-1 max-h-64 w-full overflow-auto rounded border border-slate-300 bg-white shadow">
-          {isFetching && <li className="px-2 py-1 text-slate-400">Поиск…</li>}
+          {isFetching && <li className="px-2 py-1 text-slate-400">Searching…</li>}
           {error && <li className="px-2 py-1 text-red-600">{(error as Error).message}</li>}
-          {!isFetching && !error && items.length === 0 && <li className="px-2 py-1 text-slate-400">Ничего не найдено</li>}
+          {!isFetching && !error && items.length === 0 && <li className="px-2 py-1 text-slate-400">Nothing found</li>}
           {items.map((o) => (
             <li
               key={o.id}

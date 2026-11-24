@@ -19,16 +19,16 @@ export default function Creator({ onOpen }: { onOpen: (id: number) => void }) {
     <div className="max-w-md space-y-4">
       <h2 className="text-lg font-semibold">New campaign</h2>
       <label className="block">
-        <span className="text-sm text-slate-500">Name (префикс test_verkhoturov_ добавится сам)</span>
+        <span className="text-sm text-slate-500">Name (prefix test_verkhoturov_ is added automatically)</span>
         <input
           className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="имя кампании"
+          placeholder="campaign name"
         />
       </label>
       <label className="block">
-        <span className="text-sm text-slate-500">Geo (код страны, например AU)</span>
+        <span className="text-sm text-slate-500">Geo (country code, e.g. AU)</span>
         <input
           className="mt-1 w-full rounded border border-slate-300 bg-white px-2 py-1.5 uppercase"
           value={geo}
@@ -46,17 +46,17 @@ export default function Creator({ onOpen }: { onOpen: (id: number) => void }) {
         onClick={() => create.mutate()}
         className="w-full rounded bg-sky-600 py-2 font-medium text-white disabled:opacity-40"
       >
-        {create.isPending ? "Создаю…" : "Create"}
+        {create.isPending ? "Creating…" : "Create"}
       </button>
       {create.error && <p className="text-red-600">{(create.error as Error).message}</p>}
       {create.data && (
         <div className="rounded border border-green-300 bg-green-50 p-3 text-sm">
-          Создана кампания <b>{create.data.name}</b> (id {create.data.id}, alias {create.data.alias})
+          Campaign created: <b>{create.data.name}</b> (id {create.data.id}, alias {create.data.alias})
           <br />
-          домен: {create.data.domain.name} · группа: {create.data.group.name} · источник: {create.data.source.name}
+          domain: {create.data.domain.name} · group: {create.data.group.name} · source: {create.data.source.name}
           <br />
           <button className="mt-1 text-sky-700 underline" onClick={() => onOpen(create.data!.id)}>
-            Открыть в редакторе
+            Open in editor
           </button>
         </div>
       )}

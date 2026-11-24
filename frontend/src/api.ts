@@ -42,8 +42,6 @@ export const api = {
   campaigns: () => call<CampaignListItem[]>("GET", "/campaigns"),
   campaign: (id: number) => call<Campaign>("GET", `/campaigns/${id}`),
   createCampaign: (b: { name: string; geo: string; offer_id: number }) => call<Created>("POST", "/campaigns", b),
-  addOffer: (streamId: number, offer_id: number) => call("POST", `/streams/${streamId}/offers`, { offer_id }),
-  removeOffer: (streamId: number, offerId: number) => call("DELETE", `/streams/${streamId}/offers/${offerId}`),
-  setShares: (streamId: number, shares: Record<number, number>) =>
-    call("PUT", `/streams/${streamId}/offers/shares`, { shares }),
+  pushOffers: (streamId: number, offers: { offer_id: number; share: number }[]) =>
+    call("PUT", `/streams/${streamId}/offers`, { offers }),
 };

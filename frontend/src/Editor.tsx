@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { api, type Offer, type Stats, type Stream } from "./api";
 import OfferPicker from "./OfferPicker";
 
+type Row = { offer_id: number; name: string; share: number; status: "synced" | "new" | "removed"; stats: Stats };
+
 function StatCells({ s, on }: { s: Stats; on: boolean }) {
   const v = (n: number) => (on ? n : "—");
   return (
@@ -14,36 +16,64 @@ function StatCells({ s, on }: { s: Stats; on: boolean }) {
   );
 }
 
+const fromServer = (s: Stream): Row[] =>
+  s.offers.map((o) => ({ offer_id: o.offer_id, name: o.name, share: o.share, status: "synced", stats: o.stats }));
+
+/** Even split of 100% over the rows that will remain; remainder goes 1 point each to the first rows. */
+function rebalance(rows: Row[]): Row[] {
+  const alive = rows.filter((r) => r.status !== "removed");
+  const n = alive.length;
+  let i = 0;
+  return rows.map((r) => (r.status === "removed" ? r : { ...r, share: Math.floor(100 / n) + (i++ < 100 % n ? 1 : 0) }));
+}
+
+const NO_STATS: Stats = { clicks: 0, unique: 0, bots: 0 };
+
 function StreamCard({ stream, statsOn, campaignId }: { stream: Stream; statsOn: boolean; campaignId: number }) {
   const qc = useQueryClient();
-  const refresh = () => qc.invalidateQueries({ queryKey: ["campaign", campaignId] });
+  const [rows, setRows] = useState<Row[]>(() => fromServer(stream));
   const [picked, setPicked] = useState<Offer | null>(null);
-  const [shares, setShares] = useState<Record<number, number>>({});
 
-  useEffect(() => {
-    setShares(Object.fromEntries(stream.offers.map((o) => [o.offer_id, o.share])));
-  }, [stream]);
+  // reset the draft whenever fresh server data arrives (after push)
+  useEffect(() => setRows(fromServer(stream)), [stream]);
 
-  const add = useMutation({
-    mutationFn: (id: number) => api.addOffer(stream.id, id),
-    onSuccess: () => {
-      setPicked(null);
-      refresh();
-    },
+  const push = useMutation({
+    mutationFn: () =>
+      api.pushOffers(
+        stream.id,
+        rows.filter((r) => r.status !== "removed").map((r) => ({ offer_id: r.offer_id, share: r.share })),
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["campaign", campaignId] }),
   });
-  const remove = useMutation({ mutationFn: (id: number) => api.removeOffer(stream.id, id), onSuccess: refresh });
-  const save = useMutation({ mutationFn: () => api.setShares(stream.id, shares), onSuccess: refresh });
 
-  const total = Object.values(shares).reduce((a, b) => a + (Number(b) || 0), 0);
-  const dirty = stream.offers.some((o) => shares[o.offer_id] !== o.share);
+  const server = fromServer(stream);
+  const alive = rows.filter((r) => r.status !== "removed");
+  const total = alive.reduce((a, r) => a + (Number(r.share) || 0), 0);
+  const pending =
+    rows.some((r) => r.status !== "synced") || server.some((o) => rows.find((r) => r.offer_id === o.offer_id)?.share !== o.share);
+  const valid = alive.length === 0 || total === 100;
   const editable = stream.schema === "landings";
-  const err = (add.error || remove.error || save.error) as Error | null;
+
+  const add = () => {
+    if (!picked) return;
+    setRows(rebalance([...rows, { offer_id: picked.id, name: picked.name, share: 0, status: "new", stats: NO_STATS }]));
+    setPicked(null);
+  };
+  const remove = (id: number) =>
+    setRows(
+      rebalance(
+        rows.flatMap((r) => (r.offer_id !== id ? [r] : r.status === "new" ? [] : [{ ...r, status: "removed" as const }])),
+      ),
+    );
 
   return (
-    <section className="rounded border border-slate-200 bg-white p-4">
+    <section
+      className={`rounded border p-4 transition-colors ${pending ? "border-yellow-400 bg-yellow-100" : "border-slate-200 bg-white"}`}
+    >
       <div className="flex items-baseline justify-between">
         <h3 className="font-semibold">
           {stream.name} <span className="text-xs font-normal text-slate-400">{stream.type}</span>
+          {pending && <span className="ml-2 rounded bg-yellow-300 px-1.5 py-0.5 text-xs font-medium">Pending approval</span>}
         </h3>
         <table className="text-sm text-slate-500">
           <tbody>
@@ -56,10 +86,10 @@ function StreamCard({ stream, statsOn, campaignId }: { stream: Stream; statsOn: 
 
       {!editable && (
         <p className="mt-2 text-sm text-slate-600">
-          {stream.action_payload && <>Редирект на {stream.action_payload}. </>}
+          {stream.action_payload && <>Redirect to {stream.action_payload}. </>}
           {stream.filters.map((f) => (
             <span key={f.name} className="mr-2 rounded bg-slate-100 px-1.5 py-0.5">
-              {f.name} {f.mode === "accept" ? "принимать" : "отклонять"} {f.payload?.join(", ")}
+              {f.name} {f.mode === "accept" ? "accept" : "reject"} {f.payload?.join(", ")}
             </span>
           ))}
         </p>
@@ -70,82 +100,100 @@ function StreamCard({ stream, statsOn, campaignId }: { stream: Stream; statsOn: 
           <table className="mt-3 w-full text-sm">
             <thead className="text-left text-xs text-slate-400">
               <tr>
-                <th className="font-normal">Оффер</th>
-                <th className="w-24 font-normal">Доля, %</th>
-                <th className="px-2 text-right font-normal">Клики</th>
-                <th className="px-2 text-right font-normal">Уник.</th>
-                <th className="px-2 text-right font-normal">Боты</th>
+                <th className="font-normal">Offer</th>
+                <th className="w-24 font-normal">Share, %</th>
+                <th className="px-2 text-right font-normal">Clicks</th>
+                <th className="px-2 text-right font-normal">Unique</th>
+                <th className="px-2 text-right font-normal">Bots</th>
                 <th className="w-8" />
               </tr>
             </thead>
             <tbody>
-              {stream.offers.map((o) => (
-                <tr key={o.offer_id} className="border-t border-slate-100">
+              {rows.map((r) => (
+                <tr
+                  key={r.offer_id}
+                  className={`border-t border-slate-100 ${r.status === "new" ? "bg-yellow-200" : ""} ${r.status === "removed" ? "text-slate-400 line-through" : ""}`}
+                >
                   <td className="py-1.5">
-                    <span className="text-slate-400">[{o.offer_id}]</span> {o.name}
+                    <span className="text-slate-400">[{r.offer_id}]</span> {r.name}
+                    {r.status === "new" && <span className="ml-2 text-xs no-underline">new</span>}
+                    {r.status === "removed" && <span className="ml-2 text-xs">to be removed</span>}
                   </td>
                   <td>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      className="w-16 rounded border border-slate-300 px-1 py-0.5"
-                      value={shares[o.offer_id] ?? 0}
-                      onChange={(e) => setShares({ ...shares, [o.offer_id]: Number(e.target.value) })}
-                    />
+                    {r.status !== "removed" && (
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        className="w-16 rounded border border-slate-300 bg-white px-1 py-0.5"
+                        value={r.share}
+                        onChange={(e) =>
+                          setRows(rows.map((x) => (x.offer_id === r.offer_id ? { ...x, share: Number(e.target.value) } : x)))
+                        }
+                      />
+                    )}
                   </td>
-                  <StatCells s={o.stats} on={statsOn} />
+                  <StatCells s={r.stats} on={statsOn && r.status !== "new"} />
                   <td>
-                    <button
-                      title="Удалить оффер"
-                      disabled={remove.isPending}
-                      onClick={() => remove.mutate(o.offer_id)}
-                      className="text-slate-400 hover:text-red-600"
-                    >
-                      ✕
-                    </button>
+                    {r.status !== "removed" && (
+                      <button title="Remove offer" onClick={() => remove(r.offer_id)} className="text-slate-400 hover:text-red-600">
+                        ✕
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
-              {stream.offers.length === 0 && (
+              {rows.length === 0 && (
                 <tr>
                   <td colSpan={6} className="py-2 text-slate-400">
-                    Офферов нет
+                    No offers
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
 
-          {stream.offers.length > 0 && (
-            <div className="mt-2 flex items-center gap-3 text-sm">
-              <span className={total === 100 ? "text-green-700" : "text-red-600"}>Сумма: {total}%</span>
-              <button
-                disabled={!dirty || total !== 100 || save.isPending}
-                onClick={() => save.mutate()}
-                className="rounded border border-sky-600 px-2 py-0.5 text-sky-700 disabled:opacity-40"
-              >
-                Сохранить доли
-              </button>
-            </div>
-          )}
-
           <div className="mt-3 flex gap-2">
             <div className="flex-1">
-              <OfferPicker value={picked} onChange={setPicked} exclude={stream.offers.map((o) => o.offer_id)} />
+              <OfferPicker value={picked} onChange={setPicked} exclude={alive.map((r) => r.offer_id)} />
             </div>
             <button
-              disabled={!picked || add.isPending}
-              onClick={() => add.mutate(picked!.id)}
+              disabled={!picked}
+              onClick={add}
               className="rounded bg-sky-600 px-3 text-white disabled:opacity-40"
             >
-              Добавить
+              Add
             </button>
           </div>
-          <p className="mt-1 text-xs text-slate-400">При добавлении/удалении доли выравниваются поровну (в сумме 100%).</p>
+          <p className="mt-1 text-xs text-slate-500">
+            Changes stay local until pushed. Adding/removing re-splits shares evenly; you can edit them by hand.
+          </p>
+
+          <div className="mt-3 flex items-center gap-3 text-sm">
+            <span className={valid ? "text-green-700" : "text-red-600"}>Total: {total}%</span>
+            <button
+              disabled={!pending || !valid || push.isPending}
+              onClick={() => push.mutate()}
+              className="rounded bg-green-600 px-3 py-1 font-medium text-white disabled:opacity-40"
+            >
+              {push.isPending ? "Pushing…" : "Push to KT"}
+            </button>
+            <button
+              disabled={!pending || push.isPending}
+              onClick={() => {
+                setRows(fromServer(stream));
+                setPicked(null);
+                push.reset();
+              }}
+              className="rounded border border-slate-400 bg-white px-3 py-1 disabled:opacity-40"
+            >
+              Cancel
+            </button>
+            {!valid && <span className="text-red-600">Shares must sum to 100%</span>}
+          </div>
         </>
       )}
-      {err && <p className="mt-2 text-sm text-red-600">{err.message}</p>}
+      {push.error && <p className="mt-2 text-sm text-red-600">{(push.error as Error).message}</p>}
     </section>
   );
 }
@@ -167,7 +215,7 @@ export default function Editor({ campaignId, onSelect }: { campaignId: number | 
           onChange={(e) => onSelect(Number(e.target.value))}
         >
           <option value="" disabled>
-            Выберите кампанию…
+            Select a campaign…
           </option>
           {list.data?.map((c) => (
             <option key={c.id} value={c.id}>
@@ -178,13 +226,13 @@ export default function Editor({ campaignId, onSelect }: { campaignId: number | 
         {list.error && <span className="text-red-600">{(list.error as Error).message}</span>}
       </div>
 
-      {camp.isLoading && <p className="text-slate-400">Загрузка…</p>}
+      {camp.isLoading && <p className="text-slate-400">Loading…</p>}
       {camp.error && <p className="text-red-600">{(camp.error as Error).message}</p>}
       {camp.data && (
         <>
           {!camp.data.stats_available && (
             <p className="rounded bg-amber-50 p-2 text-sm text-amber-800">
-              Статистика недоступна: стенд не отдаёт /report/build. Показаны прочерки.
+              Stats unavailable: the server does not expose /report/build. Dashes are shown instead.
             </p>
           )}
           {camp.data.streams.map((s) => (

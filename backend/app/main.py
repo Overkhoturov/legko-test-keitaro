@@ -200,67 +200,36 @@ async def get_campaign(campaign_id: int):
     }
 
 
-class OfferAdd(BaseModel):
+class OfferShare(BaseModel):
     offer_id: int
+    share: int = Field(ge=0, le=100)
 
 
-class Shares(BaseModel):
-    shares: dict[int, int]  # offer_id -> percent
+class OffersPush(BaseModel):
+    offers: list[OfferShare]
 
 
-def _rebalance(offers: list[dict]) -> list[dict]:
-    """Even split of 100%; the remainder goes one point each to the first offers."""
-    n = len(offers)
-    for i, o in enumerate(offers):
-        o["share"] = 100 // n + (1 if i < 100 % n else 0)
-    return offers
+@app.put("/api/streams/{stream_id}/offers")
+async def push_offers(stream_id: int, body: OffersPush):
+    """Apply a reviewed (staged) offers list to Keitaro in one request.
 
-
-async def _landings_stream(stream_id: int) -> dict:
+    Keitaro's PUT /streams/{id} replaces the whole offers list, so this is the full final state.
+    """
     s = await keitaro.get(f"/streams/{stream_id}")
     if s.get("schema") != "landings":
         raise HTTPException(400, "Offers can only be edited in a 'landings' stream")
-    return s
-
-
-async def _put_offers(stream_id: int, offers: list[dict]):
-    # PUT replaces the whole offers list, so always send the complete one
+    ids = [o.offer_id for o in body.offers]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(400, "Duplicate offers")
+    if body.offers and sum(o.share for o in body.offers) != 100:
+        raise HTTPException(400, "Shares must sum to 100")
+    current = {o["offer_id"]: o for o in s.get("offers") or []}
+    for oid in ids:
+        if oid not in current:  # newly added: make sure it exists
+            await keitaro.get(f"/offers/{oid}")
     await keitaro.put(f"/streams/{stream_id}", {"offers": [
-        {"offer_id": o["offer_id"], "share": o["share"], "state": o.get("state", "active")}
-        for o in offers
+        {"offer_id": o.offer_id, "share": o.share,
+         "state": current.get(o.offer_id, {}).get("state", "active")}
+        for o in body.offers
     ]})
-
-
-@app.post("/api/streams/{stream_id}/offers")
-async def add_offer(stream_id: int, body: OfferAdd):
-    s = await _landings_stream(stream_id)
-    offers = s.get("offers") or []
-    if any(o["offer_id"] == body.offer_id for o in offers):
-        raise HTTPException(409, "Offer already in this stream")
-    await keitaro.get(f"/offers/{body.offer_id}")
-    offers.append({"offer_id": body.offer_id, "share": 0, "state": "active"})
-    await _put_offers(stream_id, _rebalance(offers))
-    return {"ok": True}
-
-
-@app.delete("/api/streams/{stream_id}/offers/{offer_id}")
-async def remove_offer(stream_id: int, offer_id: int):
-    s = await _landings_stream(stream_id)
-    current = s.get("offers") or []
-    offers = [o for o in current if o["offer_id"] != offer_id]
-    if len(offers) == len(current):
-        raise HTTPException(404, "Offer not in this stream")
-    await _put_offers(stream_id, _rebalance(offers))
-    return {"ok": True}
-
-
-@app.put("/api/streams/{stream_id}/offers/shares")
-async def set_shares(stream_id: int, body: Shares):
-    s = await _landings_stream(stream_id)
-    offers = s.get("offers") or []
-    if set(body.shares) != {o["offer_id"] for o in offers} or sum(body.shares.values()) != 100:
-        raise HTTPException(400, "Shares must cover every offer and sum to 100")
-    for o in offers:
-        o["share"] = body.shares[o["offer_id"]]
-    await _put_offers(stream_id, offers)
     return {"ok": True}

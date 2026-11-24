@@ -17,10 +17,10 @@ export default function App() {
     <div className="mx-auto max-w-4xl p-6">
       <nav className="mb-6 flex border-b border-slate-200">
         <button className={tabCls("create")} onClick={() => setTab("create")}>
-          Создать кампанию
+          Create campaign
         </button>
         <button className={tabCls("edit")} onClick={() => setTab("edit")}>
-          Редактор
+          Editor
         </button>
       </nav>
       {tab === "create" ? <Creator onOpen={open} /> : <Editor campaignId={campaignId} onSelect={setCampaignId} />}
